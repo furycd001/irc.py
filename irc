@@ -1,31 +1,5 @@
 #!/usr/bin/env python3
 
-"""
-irc — tabbed multi-server terminal IRC client
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Install:  cp irc ~/.local/bin/irc && chmod +x ~/.local/bin/irc
-Requires: Python 3.7+  (no external packages)
-
-Tab switching
-  Alt+1 … Alt+9        switch to tab 1–9
-  Alt+0                switch to tab 10
-  Ctrl+Right / Ctrl+N  cycle forward through tabs
-  Ctrl+Left  / Ctrl+P  cycle backward through tabs
-  Ctrl+L               force full redraw
-
-Commands (type in the input box)
-  /join  #channel      join a channel (stays on current server)
-  /part                leave the current channel
-  /ns    <cmd>         send a command to NickServ  (e.g. /ns help)
-  /msg   Nick text     send a private message
-  /server Name         set context for /join to a different server
-                       (e.g.  /server OFTC  then  /join #debian)
-  /quit                disconnect from all servers and exit
-
-History
-  Up / Down arrow      scroll through messages you have sent
-"""
-
 import curses
 import re
 import ssl
@@ -35,21 +9,18 @@ import time
 import sys
 from collections import deque
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONFIG — edit this section
-# ══════════════════════════════════════════════════════════════════════════════
+# CONFIG
 
 SERVERS = [
     {
-        "name":     "Libera",           # short label shown in the tab bar
+        "name":     "Libera",
         "host":     "irc.libera.chat",
         "port":     6697,
         "nick":     "YourNickHere",
         "pass":     "YourPasswordHere",
-        "channels": ["#yourchannel"],   # auto-joined on connect
+        "channels": ["#yourchannel"],
     },
-
-    # Uncomment and fill in to add more servers:
+    
     # {
     #     "name":     "OFTC",
     #     "host":     "irc.oftc.net",
@@ -60,29 +31,20 @@ SERVERS = [
     # },
 ]
 
-RECONNECT_DELAY = 20    # seconds to wait before reconnecting after a drop
-MAX_BUFFER      = 500   # lines kept per tab
+RECONNECT_DELAY = 20
+MAX_BUFFER      = 500
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  LINE SEGMENT TYPES  (used for colouring individual parts of a line)
-# ══════════════════════════════════════════════════════════════════════════════
+# SEGMENT TYPES
 
-S_NORMAL = 0   # plain text
-S_NICK   = 1   # <nick>  — bold
-S_SELF   = 2   # your own <nick>  — bold cyan
-S_STATUS = 3   # -- status messages --  — dim
-S_PM     = 4   # [PM from X]  — yellow
+S_NORMAL = 0
+S_NICK   = 1
+S_SELF   = 2
+S_STATUS = 3
+S_PM     = 4
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  DATA MODEL
-# ══════════════════════════════════════════════════════════════════════════════
+# DATA MODEL
 
 class Tab:
-    """
-    One pane in the tab bar — either a channel or a server's NickServ pane.
-    Lines are stored as lists of (text, segment_type) tuples so the renderer
-    can colour each part individually.
-    """
     def __init__(self, server_name: str, name: str, is_nickserv: bool = False):
         self.server_name = server_name
         self.name        = name
@@ -106,9 +68,6 @@ class Tab:
             return list(self.buffer)
 
 
-# Strips IRC formatting codes before displaying text:
-#   \x02 bold  \x1d italic  \x1f underline  \x16 reverse  \x0f reset
-#   \x03 colour  (optionally followed by fg,bg numbers)
 _IRC_FMT = re.compile(r"\x03(?:\d{1,2}(?:,\d{1,2})?)?|[\x02\x1d\x1f\x16\x0f]")
 
 def _strip(text: str) -> str:
@@ -116,24 +75,17 @@ def _strip(text: str) -> str:
 
 
 class IRCServer:
-    """
-    Manages a single IRC server connection.
-    Runs a reader thread; calls ui callbacks on every incoming message.
-    Reconnects automatically after any disconnect.
-    """
 
     def __init__(self, cfg: dict, on_update, on_new_tab):
-        self.cfg        = cfg
-        self.name       = cfg["name"]
-        self.nick       = cfg["nick"]
-        self._on_update  = on_update   # on_update(tab)  — tell the UI to redraw
-        self._on_new_tab = on_new_tab  # on_new_tab(tab) — a new tab was created
-        self._sock      = None
-        self._slock     = threading.Lock()
-        self._running   = False
-
-        # One NickServ/notices tab + one tab per channel
-        self.ns_tab   = Tab(self.name, "NickServ", is_nickserv=True)
+        self.cfg         = cfg
+        self.name        = cfg["name"]
+        self.nick        = cfg["nick"]
+        self._on_update  = on_update
+        self._on_new_tab = on_new_tab
+        self._sock       = None
+        self._slock      = threading.Lock()
+        self._running    = False
+        self.ns_tab      = Tab(self.name, "NickServ", is_nickserv=True)
         self.chan_tabs: dict[str, Tab] = {}
         for c in cfg["channels"]:
             self.chan_tabs[c] = Tab(self.name, c)
@@ -144,7 +96,7 @@ class IRCServer:
     def all_tabs(self) -> list:
         return [self.ns_tab] + list(self.chan_tabs.values())
 
-    # ── Networking ────────────────────────────────────────────────────────────
+    # Networking
 
     def start(self) -> None:
         self._running = True
@@ -162,7 +114,7 @@ class IRCServer:
             except Exception:
                 pass
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    # Internal helpers
 
     def _status(self, tab: Tab, text: str) -> None:
         tab.append([(f"-- {text} --", S_STATUS)])
@@ -176,14 +128,12 @@ class IRCServer:
                 raw = socket.create_connection(
                     (self.cfg["host"], self.cfg["port"]), timeout=30)
                 ctx = ssl.create_default_context()
-                self._sock = ctx.wrap_socket(raw,
-                                             server_hostname=self.cfg["host"])
+                self._sock = ctx.wrap_socket(raw, server_hostname=self.cfg["host"])
                 self._sock.settimeout(None)
-                # Authenticate
                 self.send(f"PASS {self.cfg['pass']}")
                 self.send(f"NICK {self.nick}")
                 self.send(f"USER {self.nick} 0 * :{self.nick}")
-                self._read()   # blocks until disconnected
+                self._read()
             except Exception as exc:
                 self._status(self.ns_tab, f"error: {exc}")
             finally:
@@ -214,28 +164,24 @@ class IRCServer:
                 break
 
     def _parse(self, raw: str) -> None:
-        # ── PING ─────────────────────────────────────────────────────────────
         if raw.startswith("PING "):
             self.send("PONG " + raw[5:])
             return
 
-        parts = raw.split(" ", 3)
+        parts    = raw.split(" ", 3)
         if len(parts) < 2:
             return
+        prefix   = parts[0].lstrip(":")
+        cmd      = parts[1]
+        param    = parts[2].strip() if len(parts) > 2 else ""
+        trail    = _strip(parts[3].lstrip(":")) if len(parts) > 3 else ""
+        src_nick = prefix.split("!")[0]
 
-        prefix    = parts[0].lstrip(":")
-        cmd       = parts[1]
-        param     = parts[2].strip() if len(parts) > 2 else ""
-        trail     = _strip(parts[3].lstrip(":")) if len(parts) > 3 else ""
-        src_nick  = prefix.split("!")[0]
-
-        # ── End of MOTD / no MOTD → join channels ────────────────────────────
         if cmd in ("376", "422"):
             for chan in list(self.chan_tabs.keys()):
                 self.send(f"JOIN {chan}")
             return
 
-        # ── JOIN ─────────────────────────────────────────────────────────────
         if cmd == "JOIN":
             chan = param.lstrip(":").strip()
             if src_nick == self.nick:
@@ -246,12 +192,9 @@ class IRCServer:
                 self._status(self.chan_tabs[chan], f"joined {chan}")
             return
 
-        # ── PART ─────────────────────────────────────────────────────────────
         if cmd == "PART":
-            # We handle the local side in the UI; nothing to do in the server
             return
 
-        # ── PRIVMSG ──────────────────────────────────────────────────────────
         if cmd == "PRIVMSG":
             target = param
             if target.startswith("#"):
@@ -263,7 +206,6 @@ class IRCServer:
                     ])
                     self._on_update(tab)
             elif target == self.nick:
-                # Direct PM — route to NickServ/notices tab
                 self.ns_tab.append([
                     (f"[PM from {src_nick}]", S_PM),
                     (f" {trail}",             S_NORMAL),
@@ -271,7 +213,6 @@ class IRCServer:
                 self._on_update(self.ns_tab)
             return
 
-        # ── NOTICE (NickServ auth replies etc.) ──────────────────────────────
         if cmd == "NOTICE":
             self.ns_tab.append([
                 (f"[{src_nick}]", S_STATUS),
@@ -281,19 +222,13 @@ class IRCServer:
             return
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  UI
-# ══════════════════════════════════════════════════════════════════════════════
+# UI
 
 class UI:
-    """
-    Curses-based UI.  Runs entirely in the main thread.
-    Background server threads signal it via self._dirty.
-    """
 
     def __init__(self, stdscr):
         self.scr       = stdscr
-        self.tabs: list[Tab]          = []
+        self.tabs: list[Tab]               = []
         self.servers: dict[str, IRCServer] = {}
         self.active    = 0
         self.input     = ""
@@ -301,43 +236,36 @@ class UI:
         self.hist_pos  = -1
         self._lock     = threading.Lock()
         self._dirty    = threading.Event()
-        # Tracks the "current server" for /join when the user picks a different
-        # server with /server <Name> without switching tabs.
         self._cmd_server: str | None = None
         self._init_curses()
         self._init_colors()
 
-    # ── Setup ─────────────────────────────────────────────────────────────────
+    # Setup
 
     def _init_curses(self) -> None:
         curses.curs_set(1)
         curses.noecho()
         curses.cbreak()
         self.scr.keypad(True)
-        self.scr.timeout(100)    # 100 ms poll so signals/redraws aren't missed
+        self.scr.timeout(100)
 
     def _init_colors(self) -> None:
         curses.start_color()
         curses.use_default_colors()
-        # pair(n): foreground, background  (-1 = terminal default)
-        curses.init_pair(1, curses.COLOR_CYAN,   -1)   # active tab / prompt
-        curses.init_pair(2, curses.COLOR_WHITE,  -1)   # inactive tab
-        curses.init_pair(3, curses.COLOR_YELLOW, -1)   # unread tab / PM
-        curses.init_pair(4, curses.COLOR_WHITE,  -1)   # nick  (bold applied separately)
-        curses.init_pair(5, curses.COLOR_WHITE,  -1)   # status (dim applied separately)
+        curses.init_pair(1, curses.COLOR_CYAN,   -1)
+        curses.init_pair(2, curses.COLOR_WHITE,  -1)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_WHITE,  -1)
+        curses.init_pair(5, curses.COLOR_WHITE,  -1)
 
     def _seg_attr(self, seg_type: int) -> int:
-        if seg_type == S_NICK:
-            return curses.color_pair(4) | curses.A_BOLD
-        if seg_type == S_SELF:
-            return curses.color_pair(1) | curses.A_BOLD
-        if seg_type == S_STATUS:
-            return curses.color_pair(5) | curses.A_DIM
-        if seg_type == S_PM:
-            return curses.color_pair(3) | curses.A_BOLD
-        return 0   # S_NORMAL — plain terminal default
+        if seg_type == S_NICK:   return curses.color_pair(4) | curses.A_BOLD
+        if seg_type == S_SELF:   return curses.color_pair(1) | curses.A_BOLD
+        if seg_type == S_STATUS: return curses.color_pair(5) | curses.A_DIM
+        if seg_type == S_PM:     return curses.color_pair(3) | curses.A_BOLD
+        return 0
 
-    # ── Server / tab management ───────────────────────────────────────────────
+    # Server / tab management
 
     def add_server(self, cfg: dict) -> None:
         srv = IRCServer(cfg, self._on_update, self._on_new_tab)
@@ -348,13 +276,11 @@ class UI:
         srv.start()
 
     def _on_update(self, tab: Tab) -> None:
-        """Called from reader threads when a tab has new content."""
         if self.tabs and tab is not self.tabs[self.active]:
             tab.unread = True
         self._dirty.set()
 
     def _on_new_tab(self, tab: Tab) -> None:
-        """Called from reader threads when a /join creates a brand-new tab."""
         with self._lock:
             if tab not in self.tabs:
                 self.tabs.append(tab)
@@ -372,7 +298,7 @@ class UI:
         if self.tabs:
             self._switch((self.active + direction) % len(self.tabs))
 
-    # ── Drawing ───────────────────────────────────────────────────────────────
+    # Drawing
 
     def draw(self) -> None:
         try:
@@ -386,13 +312,12 @@ class UI:
             self._draw_input(rows, cols)
             self.scr.refresh()
         except curses.error:
-            pass   # ignore resize artefacts mid-draw
+            pass
 
     def _draw_tabbar(self, cols: int) -> None:
         x = 0
         for i, tab in enumerate(self.tabs):
-            # Number shown: 1–9 for indexes 0–8, then 0 for index 9
-            num = (i + 1) if i < 9 else 0
+            num   = (i + 1) if i < 9 else 0
             label = f" {num}:{tab.label} "
             if x + len(label) > cols:
                 break
@@ -417,10 +342,10 @@ class UI:
     def _draw_messages(self, rows: int, cols: int) -> None:
         if not self.tabs:
             return
-        msg_area = rows - 3          # rows 2 … (rows-2)
+        msg_area  = rows - 3
         all_lines = self.tabs[self.active].lines()
         visible   = all_lines[-msg_area:] if len(all_lines) > msg_area else all_lines
-        row = 2 + (msg_area - len(visible))   # push messages to the bottom
+        row       = 2 + (msg_area - len(visible))
         for segs in visible:
             try:
                 self.scr.move(row, 0)
@@ -445,31 +370,22 @@ class UI:
             self.scr.clrtoeol()
             if not self.tabs:
                 return
-            tab = self.tabs[self.active]
-            if tab.is_nickserv:
-                prompt = f"[NickServ] > "
-            else:
-                prompt = f"[{tab.name}] > "
-            full  = prompt + self.input
+            tab    = self.tabs[self.active]
+            prompt = "[NickServ] > " if tab.is_nickserv else f"[{tab.name}] > "
+            full   = prompt + self.input
             self.scr.addstr(row, 0, full[: cols - 1], curses.color_pair(1))
-            cur_x = min(len(full), cols - 1)
-            self.scr.move(row, cur_x)
+            self.scr.move(row, min(len(full), cols - 1))
         except curses.error:
             pass
 
-    # ── Command processing ────────────────────────────────────────────────────
+    # Command processing
 
     def _active_server(self) -> "IRCServer | None":
-        """Return the server that owns the currently active tab."""
         if not self.tabs:
             return None
         return self.servers.get(self.tabs[self.active].server_name)
 
     def _cmd_ctx_server(self) -> "IRCServer | None":
-        """
-        Return the server to use for /join etc.
-        If the user ran /server <Name>, that overrides the active tab's server.
-        """
         if self._cmd_server:
             return self.servers.get(self._cmd_server)
         return self._active_server()
@@ -477,7 +393,6 @@ class UI:
     def _process(self, text: str) -> None:
         if not text:
             return
-        # Add to history (skip exact duplicates at position 0)
         if not self.hist or self.hist[0] != text:
             self.hist.insert(0, text)
             if len(self.hist) > 200:
@@ -490,41 +405,35 @@ class UI:
             if not tab or not srv:
                 return
             if tab.is_nickserv:
-                # On the NickServ tab, plain text goes straight to NickServ
                 srv.send(f"PRIVMSG NickServ :{text}")
                 tab.append([
-                    ("[you u2192 NickServ]", S_STATUS),
+                    ("[you → NickServ]", S_STATUS),
                     (f" {text}",         S_NORMAL),
                 ])
-                tab.unread = False
-                self.draw()
             else:
                 srv.send(f"PRIVMSG {tab.name} :{text}")
                 tab.append([
                     (f"<{srv.nick}>", S_SELF),
                     (f" {text}",      S_NORMAL),
                 ])
-                tab.unread = False
-                self.draw()
+            tab.unread = False
+            self.draw()
             return
-        # ── Command dispatch ──────────────────────────────────────────────────
+
         parts = text[1:].split(" ", 2)
         cmd   = parts[0].lower()
         arg1  = parts[1].strip() if len(parts) > 1 else ""
         rest  = parts[2]         if len(parts) > 2 else ""
 
-        # /quit
         if cmd == "quit":
             for srv in self.servers.values():
                 srv.stop()
             time.sleep(0.3)
             raise SystemExit
 
-        # /server <Name>  — set command context server for subsequent /join etc.
         elif cmd == "server":
             if arg1 in self.servers:
                 self._cmd_server = arg1
-                # Switch to that server's NickServ tab so the user has feedback
                 for i, t in enumerate(self.tabs):
                     if t.server_name == arg1 and t.is_nickserv:
                         self._switch(i)
@@ -536,25 +445,22 @@ class UI:
                         [(f"-- unknown server '{arg1}'. known: {names} --", S_STATUS)])
             self.draw()
 
-        # /join #channel
         elif cmd == "join" and arg1:
             chan = arg1 if arg1.startswith("#") else "#" + arg1
             srv  = self._cmd_ctx_server()
             if srv:
-                self._cmd_server = None   # reset override after use
+                self._cmd_server = None
                 if chan not in srv.chan_tabs:
                     tab = Tab(srv.name, chan)
                     srv.chan_tabs[chan] = tab
                     with self._lock:
                         self.tabs.append(tab)
                 srv.send(f"JOIN {chan}")
-                # Switch to that channel's tab
                 for i, t in enumerate(self.tabs):
                     if t.server_name == srv.name and t.name == chan:
                         self._switch(i)
                         break
 
-        # /part  or  /part #channel
         elif cmd == "part":
             tab = self.tabs[self.active] if self.tabs else None
             srv = self._active_server()
@@ -569,7 +475,6 @@ class UI:
                         self.active = max(0, min(idx, len(self.tabs) - 1))
             self.draw()
 
-        # /ns <command>  — send to NickServ, open that server's NS tab
         elif cmd == "ns" and arg1:
             ns_cmd = (arg1 + " " + rest).strip()
             srv    = self._active_server()
@@ -584,7 +489,6 @@ class UI:
                         self._switch(i)
                         break
 
-        # /msg Nick text
         elif cmd == "msg" and arg1:
             srv = self._active_server()
             tab = self.tabs[self.active] if self.tabs else None
@@ -597,47 +501,40 @@ class UI:
                 self.draw()
 
         else:
-            # Pass anything else verbatim to the current server
             srv = self._active_server()
             if srv:
                 srv.send(text[1:])
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+    # Main loop
 
     def run(self) -> None:
         self.draw()
         while True:
-            # Flush pending redraws triggered by reader threads
             if self._dirty.is_set():
                 self._dirty.clear()
                 self.draw()
 
             ch = self.scr.getch()
             if ch == -1:
-                continue   # timeout — loop back and check _dirty
+                continue
 
-            # ── Resize ───────────────────────────────────────────────────────
             if ch == curses.KEY_RESIZE:
                 self.draw()
                 continue
 
-            # ── Ctrl+L — force redraw ─────────────────────────────────────────
             if ch == 12:
                 self.draw()
                 continue
 
-            # ── Escape / Alt sequences ────────────────────────────────────────
             if ch == 27:
                 self.scr.timeout(50)
                 nxt = self.scr.getch()
                 self.scr.timeout(100)
 
                 if nxt == -1:
-                    # Bare ESC — ignore
                     continue
 
                 if nxt == ord("["):
-                    # CSI — could be arrow key or Ctrl+arrow
                     seq = ""
                     self.scr.timeout(50)
                     while True:
@@ -648,14 +545,13 @@ class UI:
                         seq += chr(c2)
                     self.scr.timeout(100)
 
-                    # Standard arrow keys (no modifier)
-                    if seq == "A":   # Up
+                    if seq == "A":
                         if self.hist and self.hist_pos < len(self.hist) - 1:
                             self.hist_pos += 1
                             self.input = self.hist[self.hist_pos]
                             self._draw_input(*self.scr.getmaxyx())
                             self.scr.refresh()
-                    elif seq == "B":   # Down
+                    elif seq == "B":
                         if self.hist_pos > 0:
                             self.hist_pos -= 1
                             self.input = self.hist[self.hist_pos]
@@ -664,29 +560,25 @@ class UI:
                             self.input = ""
                         self._draw_input(*self.scr.getmaxyx())
                         self.scr.refresh()
-                    # Ctrl+Right  (5C)  or  Ctrl+Left  (5D)  — cycle tabs
                     elif seq in ("5C", "1;5C"):
                         self._cycle(+1)
                     elif seq in ("5D", "1;5D"):
                         self._cycle(-1)
 
                 else:
-                    # Alt+digit — switch tab
                     if ord("1") <= nxt <= ord("9"):
-                        self._switch(nxt - ord("1"))        # Alt+1 → index 0
+                        self._switch(nxt - ord("1"))
                     elif nxt == ord("0"):
-                        self._switch(9)                      # Alt+0 → index 9
+                        self._switch(9)
                 continue
 
-            # ── Ctrl+N / Ctrl+P — cycle tabs ─────────────────────────────────
-            if ch == 14:    # Ctrl+N
+            if ch == 14:
                 self._cycle(+1)
                 continue
-            if ch == 16:    # Ctrl+P
+            if ch == 16:
                 self._cycle(-1)
                 continue
 
-            # ── Curses-decoded arrow keys (fallback if keypad sequences differ)
             if ch == curses.KEY_UP:
                 if self.hist and self.hist_pos < len(self.hist) - 1:
                     self.hist_pos += 1
@@ -705,14 +597,12 @@ class UI:
                 self.scr.refresh()
                 continue
 
-            # ── Backspace ─────────────────────────────────────────────────────
             if ch in (curses.KEY_BACKSPACE, 127, 8):
                 self.input = self.input[:-1]
                 self._draw_input(*self.scr.getmaxyx())
                 self.scr.refresh()
                 continue
 
-            # ── Enter ─────────────────────────────────────────────────────────
             if ch in (10, 13):
                 text = self.input.strip()
                 self.input    = ""
@@ -721,16 +611,13 @@ class UI:
                 self.draw()
                 continue
 
-            # ── Printable characters ──────────────────────────────────────────
             if 32 <= ch <= 126:
                 self.input += chr(ch)
                 self._draw_input(*self.scr.getmaxyx())
                 self.scr.refresh()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT
 
 def main(stdscr):
     ui = UI(stdscr)
