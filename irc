@@ -20,15 +20,6 @@ SERVERS = [
         "pass":     "YourPasswordHere",
         "channels": ["#yourchannel"],
     },
-    
-    # {
-    #     "name":     "OFTC",
-    #     "host":     "irc.oftc.net",
-    #     "port":     6697,
-    #     "nick":     "YourNick",
-    #     "pass":     "",
-    #     "channels": ["#debian"],
-    # },
 ]
 
 RECONNECT_DELAY = 20
@@ -180,6 +171,16 @@ class IRCServer:
         if cmd in ("376", "422"):
             for chan in list(self.chan_tabs.keys()):
                 self.send(f"JOIN {chan}")
+            return
+
+        if cmd == "332":
+            raw3  = parts[3] if len(parts) > 3 else ""
+            chan  = raw3.split(" ")[0]
+            topic = _strip(raw3.split(" ", 1)[1].lstrip(":")) if " " in raw3 else ""
+            tab   = self.chan_tabs.get(chan)
+            if tab and topic:
+                tab.append([(f"-- topic: {topic} --", S_STATUS)])
+                self._on_update(tab)
             return
 
         if cmd == "JOIN":
